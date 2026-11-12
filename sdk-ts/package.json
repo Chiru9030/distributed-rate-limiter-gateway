@@ -1,0 +1,17 @@
+{
+  "name": "@chiru9030/gateway-sdk",
+  "version": "1.0.0",
+  "description": "Lightweight TypeScript SDK for the Distributed Rate-Limiter & API Gateway with automatic retries, Retry-After handling, and Idempotency-Key support.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

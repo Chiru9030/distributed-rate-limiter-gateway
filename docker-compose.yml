@@ -1,0 +1,35 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  echo-upstream:
+    image: hashicorp/http-echo:1.0
+    command: ["-listen=:9000", "-text={\"status\":\"ok\",\"upstream\":\"echo\"}"]
+    ports:
+      - "9000:9000"
+
+  gateway-1:
+    build: .
+    environment:
+      LISTEN_ADDR: ":8080"
+      REDIS_ADDR: "redis:6379"
+      UPSTREAM_URL: "http://echo-upstream:9000"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - echo-upstream
+
+  gateway-2:
+    build: .
+    environment:
+      LISTEN_ADDR: ":8081"
+      REDIS_ADDR: "redis:6379"
+      UPSTREAM_URL: "http://echo-upstream:9000"
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+      - echo-upstream
