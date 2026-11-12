@@ -18,3 +18,4 @@ type Decision struct {
 type Limiter interface {
 	Allow(ctx context.Context, key string, policy config.RateLimitPolicy) (Decision, error)
 }
+

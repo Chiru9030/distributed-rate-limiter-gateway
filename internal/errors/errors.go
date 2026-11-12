@@ -57,6 +57,16 @@ func BadGateway(w http.ResponseWriter, reqID, traceID, msg string) {
 	})
 }
 
+func ServiceUnavailable(w http.ResponseWriter, reqID, traceID, msg string) {
+	WriteJSON(w, http.StatusServiceUnavailable, APIError{
+		Type:      "api_connection_error",
+		Code:      "circuit_open",
+		Message:   msg,
+		RequestID: reqID,
+		TraceID:   traceID,
+	})
+}
+
 func NotFound(w http.ResponseWriter, reqID, traceID, path string) {
 	WriteJSON(w, http.StatusNotFound, APIError{
 		Type:      "invalid_request_error",
@@ -67,3 +77,4 @@ func NotFound(w http.ResponseWriter, reqID, traceID, path string) {
 		TraceID:   traceID,
 	})
 }
+

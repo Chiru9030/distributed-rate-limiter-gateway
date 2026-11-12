@@ -9,3 +9,4 @@ FROM alpine:3.20
 COPY --from=builder /gateway /usr/local/bin/gateway
 EXPOSE 8080
 ENTRYPOINT ["gateway"]
+

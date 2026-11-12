@@ -75,3 +75,4 @@ func main() {
 	_ = srv.Shutdown(ctx)
 	logger.Info("gateway_stopped")
 }
+

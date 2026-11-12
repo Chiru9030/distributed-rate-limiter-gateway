@@ -114,3 +114,26 @@ func TestGatewayAuthRoutingRateLimitAndTelemetry(t *testing.T) {
 		t.Fatalf("expected gateway_rate_limited_total 1 in metrics, got:\n%s", string(mBody))
 	}
 }
+
+func TestCircuitBreakerStateTransitions(t *testing.T) {
+	cb := proxy.NewCircuitBreaker(2, 50*time.Millisecond)
+	if !cb.Allow() {
+		t.Fatal("expected closed circuit to allow requests")
+	}
+
+	cb.RecordFailure()
+	cb.RecordFailure()
+	if cb.Allow() {
+		t.Fatal("expected open circuit after threshold failures")
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	if !cb.Allow() {
+		t.Fatal("expected half-open probe after reset timeout")
+	}
+	cb.RecordSuccess()
+	if !cb.Allow() {
+		t.Fatal("expected circuit to close after successful probe")
+	}
+}
+

@@ -115,3 +115,4 @@ func TestConcurrentGoroutineRateLimitSafety(t *testing.T) {
 		t.Fatalf("expected exactly 15 allowed under concurrency, got %d", got)
 	}
 }
+

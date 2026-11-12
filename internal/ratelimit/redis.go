@@ -79,13 +79,74 @@ end
 return {0, 0, retry_ms}
 `
 
-// RedisLimiter executes atomic Lua rate-limiting scripts against Redis over RESP2.
+// RedisLimiter executes atomic Lua rate-limiting scripts against Redis over a pooled RESP2 connection.
 type RedisLimiter struct {
-	addr string
+	addr     string
+	password string
+	pool     chan net.Conn
 }
 
 func NewRedisLimiter(addr string) *RedisLimiter {
-	return &RedisLimiter{addr: addr}
+	return &RedisLimiter{
+		addr: addr,
+		pool: make(chan net.Conn, 32),
+	}
+}
+
+func NewRedisLimiterWithAuth(addr, password string, poolSize int) *RedisLimiter {
+	if poolSize <= 0 {
+		poolSize = 32
+	}
+	return &RedisLimiter{
+		addr:     addr,
+		password: password,
+		pool:     make(chan net.Conn, poolSize),
+	}
+}
+
+func (r *RedisLimiter) acquireConn(ctx context.Context) (net.Conn, error) {
+	select {
+	case c := <-r.pool:
+		return c, nil
+	default:
+		var d net.Dialer
+		conn, err := d.DialContext(ctx, "tcp", r.addr)
+		if err != nil {
+			return nil, err
+		}
+		if r.password != "" {
+			if err := r.sendAuth(conn); err != nil {
+				conn.Close()
+				return nil, err
+			}
+		}
+		return conn, nil
+	}
+}
+
+func (r *RedisLimiter) releaseConn(conn net.Conn) {
+	select {
+	case r.pool <- conn:
+	default:
+		_ = conn.Close()
+	}
+}
+
+func (r *RedisLimiter) sendAuth(conn net.Conn) error {
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	cmd := fmt.Sprintf("*2\r\n$4\r\nAUTH\r\n$%d\r\n%s\r\n", len(r.password), r.password)
+	if _, err := io.WriteString(conn, cmd); err != nil {
+		return err
+	}
+	br := bufio.NewReader(conn)
+	line, err := br.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(line, "-") {
+		return errors.New(strings.TrimSpace(strings.TrimPrefix(line, "-")))
+	}
+	return nil
 }
 
 func (r *RedisLimiter) Allow(ctx context.Context, key string, policy config.RateLimitPolicy) (Decision, error) {
@@ -145,12 +206,18 @@ func (r *RedisLimiter) Allow(ctx context.Context, key string, policy config.Rate
 }
 
 func (r *RedisLimiter) evalIntArray(ctx context.Context, script string, keys []string, args ...string) ([]int64, error) {
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", r.addr)
+	conn, err := r.acquireConn(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	keepConn := true
+	defer func() {
+		if keepConn {
+			r.releaseConn(conn)
+		} else {
+			_ = conn.Close()
+		}
+	}()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
@@ -170,12 +237,14 @@ func (r *RedisLimiter) evalIntArray(ctx context.Context, script string, keys []s
 	}
 
 	if _, err := io.WriteString(conn, sb.String()); err != nil {
+		keepConn = false
 		return nil, err
 	}
 
 	br := bufio.NewReader(conn)
 	line, err := br.ReadString('\n')
 	if err != nil {
+		keepConn = false
 		return nil, err
 	}
 	line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
@@ -208,3 +277,4 @@ func (r *RedisLimiter) evalIntArray(ctx context.Context, script string, keys []s
 	}
 	return out, nil
 }
+

@@ -21,12 +21,13 @@ import (
 )
 
 type Gateway struct {
-	cfg     config.GatewayConfig
-	auth    *auth.Authenticator
-	limiter ratelimit.Limiter
-	logger  *slog.Logger
-	metrics *telemetry.Metrics
-	proxies map[string]*httputil.ReverseProxy
+	cfg      config.GatewayConfig
+	auth     *auth.Authenticator
+	limiter  ratelimit.Limiter
+	logger   *slog.Logger
+	metrics  *telemetry.Metrics
+	proxies  map[string]*httputil.ReverseProxy
+	breakers map[string]*CircuitBreaker
 }
 
 func NewGateway(
@@ -35,17 +36,22 @@ func NewGateway(
 	logger *slog.Logger,
 ) (*Gateway, error) {
 	proxies := make(map[string]*httputil.ReverseProxy, len(cfg.Routes))
+	breakers := make(map[string]*CircuitBreaker, len(cfg.Routes))
 	for _, route := range cfg.Routes {
 		target, err := url.Parse(route.Upstream)
 		if err != nil {
 			return nil, err
 		}
+		cb := NewCircuitBreaker(5, 15*time.Second)
+		breakers[route.PathPrefix] = cb
+
 		rp := httputil.NewSingleHostReverseProxy(target)
 		rp.Transport = &http.Transport{
 			ResponseHeaderTimeout: cfg.UpstreamTimeout,
 			MaxIdleConnsPerHost:   64,
 		}
 		rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			cb.RecordFailure()
 			reqID := r.Header.Get("X-Request-ID")
 			traceID := r.Header.Get("X-Trace-ID")
 			logger.Error("upstream_error", "request_id", reqID, "trace_id", traceID, "error", err.Error())
@@ -55,12 +61,13 @@ func NewGateway(
 	}
 
 	return &Gateway{
-		cfg:     cfg,
-		auth:    auth.NewAuthenticator(cfg.Tenants),
-		limiter: limiter,
-		logger:  logger,
-		metrics: &telemetry.Metrics{},
-		proxies: proxies,
+		cfg:      cfg,
+		auth:     auth.NewAuthenticator(cfg.Tenants),
+		limiter:  limiter,
+		logger:   logger,
+		metrics:  &telemetry.Metrics{},
+		proxies:  proxies,
+		breakers: breakers,
 	}, nil
 }
 
@@ -146,9 +153,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	cb := g.breakers[route.PathPrefix]
+	if cb != nil && !cb.Allow() {
+		apierrors.ServiceUnavailable(rec, reqID, traceID, "Upstream circuit breaker is open")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(rec, r.Body, 2*1024*1024)
 	r.Header.Set("X-Authenticated-Tenant", tenant.Tenant)
 	r.Header.Set("X-Authenticated-Tier", tenant.Tier)
 	proxy.ServeHTTP(rec, r)
+	if cb != nil {
+		if rec.status >= 500 {
+			cb.RecordFailure()
+		} else {
+			cb.RecordSuccess()
+		}
+	}
 }
 
 func (g *Gateway) matchRoute(path string) (config.RouteConfig, *httputil.ReverseProxy) {
@@ -178,3 +199,4 @@ func randomHex(nBytes int) string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+

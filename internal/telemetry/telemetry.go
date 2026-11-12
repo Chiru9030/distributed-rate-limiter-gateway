@@ -66,3 +66,4 @@ func (m *Metrics) ServePrometheus(w http.ResponseWriter, _ *http.Request) {
 		total, rl, auth, up, lat,
 	)
 }
+

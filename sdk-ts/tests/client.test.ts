@@ -81,3 +81,4 @@ describe('GatewayClient SDK', () => {
     expect(GatewayApiError).toBeDefined();
   });
 });
+
