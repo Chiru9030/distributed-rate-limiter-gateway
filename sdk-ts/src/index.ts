@@ -90,6 +90,31 @@ export class GatewayClient {
     return this.request<T>('DELETE', path, options);
   }
 
+  /**
+   * Executes a series of requests with bounded concurrency, aggregating results
+   * while honoring rate-limit backoffs.
+   */
+  async batch<T>(
+    requests: Array<{ method: string; path: string; body?: unknown }>,
+    concurrency = 4,
+  ): Promise<Array<GatewayResponse<T>>> {
+    const results: Array<GatewayResponse<T>> = new Array(requests.length);
+    let index = 0;
+
+    const worker = async () => {
+      while (true) {
+        const cur = index++;
+        if (cur >= requests.length) return;
+        const req = requests[cur];
+        results[cur] = await this.request<T>(req.method, req.path, { body: req.body });
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, requests.length) }, () => worker());
+    await Promise.all(workers);
+    return results;
+  }
+
   async request<T>(
     method: string,
     path: string,

@@ -1,7 +1,7 @@
 {
   "name": "@chiru9030/gateway-sdk",
-  "version": "1.0.0",
-  "description": "Lightweight TypeScript SDK for the Distributed Rate-Limiter & API Gateway with automatic retries, Retry-After handling, and Idempotency-Key support.",
+  "version": "2.0.0",
+  "description": "Enterprise TypeScript SDK v2 for the Distributed Rate-Limiter & API Gateway with automatic retries, Retry-After handling, Idempotency-Key support, and batch execution.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

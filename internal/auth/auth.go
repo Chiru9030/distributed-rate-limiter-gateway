@@ -4,16 +4,28 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/Chiru9030/distributed-rate-limiter-gateway/internal/config"
 )
 
 type Authenticator struct {
+	mu      sync.RWMutex
 	tenants map[string]config.TenantConfig
 }
 
 func NewAuthenticator(tenants map[string]config.TenantConfig) *Authenticator {
-	return &Authenticator{tenants: tenants}
+	m := make(map[string]config.TenantConfig, len(tenants))
+	for k, v := range tenants {
+		m[k] = v
+	}
+	return &Authenticator{tenants: m}
+}
+
+func (a *Authenticator) UpsertTenant(tenant config.TenantConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tenants[tenant.APIKey] = tenant
 }
 
 func (a *Authenticator) Authenticate(r *http.Request) (config.TenantConfig, bool) {
@@ -21,6 +33,9 @@ func (a *Authenticator) Authenticate(r *http.Request) (config.TenantConfig, bool
 	if token == "" {
 		return config.TenantConfig{}, false
 	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 
 	for key, tenant := range a.tenants {
 		if len(token) == len(key) && subtle.ConstantTimeCompare([]byte(token), []byte(key)) == 1 {

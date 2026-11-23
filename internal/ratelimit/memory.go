@@ -14,20 +14,27 @@ type tokenBucketState struct {
 	lastRefill time.Time
 }
 
-// MemoryLimiter implements both Token Bucket and Sliding Window Log rate limiting
+type leakyBucketState struct {
+	water    float64
+	lastLeak time.Time
+}
+
+// MemoryLimiter implements Token Bucket, Sliding Window Log, and Leaky Bucket rate limiting
 // in-memory with per-key mutex safety and an injectable clock for deterministic tests.
 type MemoryLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*tokenBucketState
-	windows map[string][]time.Time
-	nowFn   func() time.Time
+	mu           sync.Mutex
+	buckets      map[string]*tokenBucketState
+	leakyBuckets map[string]*leakyBucketState
+	windows      map[string][]time.Time
+	nowFn        func() time.Time
 }
 
 func NewMemoryLimiter() *MemoryLimiter {
 	return &MemoryLimiter{
-		buckets: make(map[string]*tokenBucketState),
-		windows: make(map[string][]time.Time),
-		nowFn:   time.Now,
+		buckets:      make(map[string]*tokenBucketState),
+		leakyBuckets: make(map[string]*leakyBucketState),
+		windows:      make(map[string][]time.Time),
+		nowFn:        time.Now,
 	}
 }
 
@@ -42,10 +49,14 @@ func (m *MemoryLimiter) Allow(_ context.Context, key string, policy config.RateL
 	defer m.mu.Unlock()
 
 	now := m.nowFn()
-	if policy.Algorithm == config.AlgoSlidingWindow {
+	switch policy.Algorithm {
+	case config.AlgoSlidingWindow:
 		return m.allowSlidingWindow(key, policy, now), nil
+	case config.AlgoLeakyBucket:
+		return m.allowLeakyBucket(key, policy, now), nil
+	default:
+		return m.allowTokenBucket(key, policy, now), nil
 	}
-	return m.allowTokenBucket(key, policy, now), nil
 }
 
 func (m *MemoryLimiter) allowTokenBucket(key string, policy config.RateLimitPolicy, now time.Time) Decision {
@@ -127,6 +138,47 @@ func (m *MemoryLimiter) allowSlidingWindow(key string, policy config.RateLimitPo
 		Limit:      policy.Limit,
 		Remaining:  0,
 		ResetAt:    oldest.Add(policy.Window),
+		RetryAfter: retryAfter,
+	}
+}
+
+func (m *MemoryLimiter) allowLeakyBucket(key string, policy config.RateLimitPolicy, now time.Time) Decision {
+	capacity := float64(policy.Limit)
+	leakRate := policy.RefillRate
+	if leakRate <= 0 && policy.Window > 0 {
+		leakRate = capacity / policy.Window.Seconds()
+	}
+
+	b, ok := m.leakyBuckets[key]
+	if !ok {
+		b = &leakyBucketState{water: 0, lastLeak: now}
+		m.leakyBuckets[key] = b
+	}
+
+	elapsed := now.Sub(b.lastLeak).Seconds()
+	if elapsed > 0 {
+		b.water = math.Max(0, b.water-elapsed*leakRate)
+		b.lastLeak = now
+	}
+
+	if b.water+1.0 <= capacity {
+		b.water += 1.0
+		remaining := int(math.Floor(capacity - b.water))
+		return Decision{
+			Allowed:   true,
+			Limit:     policy.Limit,
+			Remaining: remaining,
+			ResetAt:   now.Add(time.Duration((b.water / leakRate) * float64(time.Second))),
+		}
+	}
+
+	excess := (b.water + 1.0) - capacity
+	retryAfter := time.Duration(math.Ceil((excess / leakRate) * float64(time.Second)))
+	return Decision{
+		Allowed:    false,
+		Limit:      policy.Limit,
+		Remaining:  0,
+		ResetAt:    now.Add(retryAfter),
 		RetryAfter: retryAfter,
 	}
 }

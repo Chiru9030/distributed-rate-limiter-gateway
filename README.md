@@ -1,11 +1,21 @@
-# Distributed Rate-Limiter & API Gateway
+# Distributed Rate-Limiter & API Gateway (v2.0)
 
 [![CI](https://github.com/Chiru9030/distributed-rate-limiter-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Chiru9030/distributed-rate-limiter-gateway/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-2.0.0-green.svg)](cmd/gateway/main.go)
 [![Go Version](https://img.shields.io/badge/go-1.24-blue.svg)](https://golang.org/)
-[![TypeScript](https://img.shields.io/badge/typescript-5.7.2-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript SDK](https://img.shields.io/badge/@chiru9030/gateway--sdk-2.0.0-blue.svg)](sdk-ts/package.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance, distributed **API Gateway** written in **Go 1.24** with atomic Redis Lua-script rate limiting, constant-time API key authentication, dynamic circuit breaking, Prometheus telemetry, and an official typed **TypeScript Client SDK**.
+A high-performance, distributed **API Gateway** written in **Go 1.24** with multi-upstream load balancing, active health checking, atomic Redis Lua rate limiting (Token Bucket, Sliding Window, Leaky Bucket), constant-time API key auth, dynamic tenant hot-reloading, circuit breaking, Prometheus telemetry, and an official typed **TypeScript Client SDK v2**.
+
+---
+
+## What's New in v2.0
+- **Multi-Upstream Load Balancing (`LoadBalancer`)**: Round-Robin and Weighted balancing across multiple backend instance pools with degraded single-node fallback.
+- **Active Background Health Checking**: Continuous background health monitor probing `/health` on all registered nodes, seamlessly isolating degraded nodes.
+- **Leaky Bucket Traffic Shaping (`AlgoLeakyBucket`)**: Constant leak-rate smoothing algorithm alongside Token Bucket and Sliding Window Log.
+- **Dynamic Hot-Reloading Admin API**: `POST /v1/admin/tenants` allows provisioning new API keys and updating rate limits in real-time with zero downtime or gateway restarts.
+- **TypeScript Client SDK v2.0 (`@chiru9030/gateway-sdk`)**: Added bounded-concurrency `client.batch(...)` executor and full support for v2 features.
 
 ---
 
@@ -14,12 +24,14 @@ A high-performance, distributed **API Gateway** written in **Go 1.24** with atom
 - [Rate Limiting Algorithms](#rate-limiting-algorithms)
   - [1. Distributed Token Bucket (Redis Lua)](#1-distributed-token-bucket-redis-lua)
   - [2. Sliding Window Log (Redis Sorted Sets)](#2-sliding-window-log-redis-sorted-sets)
-  - [3. Standard Rate-Limit HTTP Headers](#3-standard-rate-limit-http-headers)
+  - [3. Leaky Bucket Traffic Shaping](#3-leaky-bucket-traffic-shaping)
+  - [4. Standard Rate-Limit HTTP Headers](#4-standard-rate-limit-http-headers)
+- [Multi-Upstream Load Balancing & Health Checking](#multi-upstream-load-balancing--health-checking)
+- [Dynamic Hot-Reloading Admin Endpoint](#dynamic-hot-reloading-admin-endpoint)
 - [Enterprise Resilience & Security](#enterprise-resilience--security)
   - [Circuit Breaker Pattern](#circuit-breaker-pattern)
   - [Constant-Time API Key Authentication](#constant-time-api-key-authentication)
   - [Standardized Stripe-Style Error Envelopes](#standardized-stripe-style-error-envelopes)
-  - [Connection Pooling & Max Request Guard](#connection-pooling--max-request-guard)
 - [Observability & Telemetry](#observability--telemetry)
 - [TypeScript Client SDK (`@chiru9030/gateway-sdk`)](#typescript-client-sdk-chiru9030gateway-sdk)
 - [Getting Started & Local Setup](#getting-started--local-setup)

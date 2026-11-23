@@ -80,5 +80,34 @@ describe('GatewayClient SDK', () => {
     });
     expect(GatewayApiError).toBeDefined();
   });
+
+  it('v2: executes batch requests with bounded concurrency', async () => {
+    let active = 0;
+    let maxObservedActive = 0;
+
+    const mockFetch: typeof fetch = async (_url, init) => {
+      active++;
+      if (active > maxObservedActive) maxObservedActive = active;
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      return new Response(JSON.stringify({ status: 'ok', body: init?.body }), { status: 200 });
+    };
+
+    const client = new GatewayClient({
+      baseUrl: 'http://localhost:8080',
+      apiKey: 'sk_test_123',
+      fetchFn: mockFetch,
+    });
+
+    const requests = Array.from({ length: 6 }, (_, i) => ({
+      method: 'POST',
+      path: `/v1/items/${i}`,
+      body: { index: i },
+    }));
+
+    const results = await client.batch(requests, 2);
+    expect(results).toHaveLength(6);
+    expect(maxObservedActive).toBeLessThanOrEqual(2);
+  });
 });
 

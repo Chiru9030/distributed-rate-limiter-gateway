@@ -21,13 +21,13 @@ import (
 )
 
 type Gateway struct {
-	cfg      config.GatewayConfig
-	auth     *auth.Authenticator
-	limiter  ratelimit.Limiter
-	logger   *slog.Logger
-	metrics  *telemetry.Metrics
-	proxies  map[string]*httputil.ReverseProxy
-	breakers map[string]*CircuitBreaker
+	cfg       config.GatewayConfig
+	auth      *auth.Authenticator
+	limiter   ratelimit.Limiter
+	logger    *slog.Logger
+	metrics   *telemetry.Metrics
+	balancers map[string]*LoadBalancer
+	breakers  map[string]*CircuitBreaker
 }
 
 func NewGateway(
@@ -35,39 +35,59 @@ func NewGateway(
 	limiter ratelimit.Limiter,
 	logger *slog.Logger,
 ) (*Gateway, error) {
-	proxies := make(map[string]*httputil.ReverseProxy, len(cfg.Routes))
+	balancers := make(map[string]*LoadBalancer, len(cfg.Routes))
 	breakers := make(map[string]*CircuitBreaker, len(cfg.Routes))
+
 	for _, route := range cfg.Routes {
-		target, err := url.Parse(route.Upstream)
-		if err != nil {
-			return nil, err
-		}
 		cb := NewCircuitBreaker(5, 15*time.Second)
 		breakers[route.PathPrefix] = cb
 
-		rp := httputil.NewSingleHostReverseProxy(target)
-		rp.Transport = &http.Transport{
-			ResponseHeaderTimeout: cfg.UpstreamTimeout,
-			MaxIdleConnsPerHost:   64,
+		// Build upstream nodes
+		var targets []config.UpstreamTarget
+		if len(route.Upstreams) > 0 {
+			targets = route.Upstreams
+		} else if route.Upstream != "" {
+			targets = []config.UpstreamTarget{{URL: route.Upstream, Weight: 1}}
 		}
-		rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			cb.RecordFailure()
-			reqID := r.Header.Get("X-Request-ID")
-			traceID := r.Header.Get("X-Trace-ID")
-			logger.Error("upstream_error", "request_id", reqID, "trace_id", traceID, "error", err.Error())
-			apierrors.BadGateway(w, reqID, traceID, "Upstream service failed to respond")
+
+		nodes := make([]*UpstreamNode, 0, len(targets))
+		for _, t := range targets {
+			u, err := url.Parse(t.URL)
+			if err != nil {
+				return nil, err
+			}
+			rp := httputil.NewSingleHostReverseProxy(u)
+			rp.Transport = &http.Transport{
+				ResponseHeaderTimeout: cfg.UpstreamTimeout,
+				MaxIdleConnsPerHost:   64,
+			}
+			rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+				cb.RecordFailure()
+				reqID := r.Header.Get("X-Request-ID")
+				traceID := r.Header.Get("X-Trace-ID")
+				logger.Error("upstream_error", "request_id", reqID, "trace_id", traceID, "error", err.Error())
+				apierrors.BadGateway(w, reqID, traceID, "Upstream service failed to respond")
+			}
+			node := &UpstreamNode{
+				URL:    u,
+				Weight: t.Weight,
+				Proxy:  rp,
+			}
+			node.Healthy.Store(true)
+			nodes = append(nodes, node)
 		}
-		proxies[route.PathPrefix] = rp
+
+		balancers[route.PathPrefix] = NewLoadBalancer(nodes, route.Strategy)
 	}
 
 	return &Gateway{
-		cfg:      cfg,
-		auth:     auth.NewAuthenticator(cfg.Tenants),
-		limiter:  limiter,
-		logger:   logger,
-		metrics:  &telemetry.Metrics{},
-		proxies:  proxies,
-		breakers: breakers,
+		cfg:       cfg,
+		auth:      auth.NewAuthenticator(cfg.Tenants),
+		limiter:   limiter,
+		logger:    logger,
+		metrics:   &telemetry.Metrics{},
+		balancers: balancers,
+		breakers:  breakers,
 	}, nil
 }
 
@@ -101,6 +121,21 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// V2: Dynamic Hot-Reloading of Tenant Tiers
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/admin/tenants" {
+		var tenant config.TenantConfig
+		if err := json.NewDecoder(r.Body).Decode(&tenant); err != nil || tenant.APIKey == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid tenant config"})
+			return
+		}
+		g.auth.UpsertTenant(tenant)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "tenant_updated", "tenant": tenant.Tenant})
+		return
+	}
+
 	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	tenantName := "anonymous"
 
@@ -125,9 +160,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	tenantName = tenant.Tenant
 
-	route, proxy := g.matchRoute(r.URL.Path)
-	if proxy == nil {
+	route, balancer := g.matchRoute(r.URL.Path)
+	if balancer == nil {
 		apierrors.NotFound(rec, reqID, traceID, r.URL.Path)
+		return
+	}
+
+	node := balancer.Next()
+	if node == nil || node.Proxy == nil {
+		apierrors.BadGateway(rec, reqID, traceID, "No available upstream instances in load balancer pool")
 		return
 	}
 
@@ -162,7 +203,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(rec, r.Body, 2*1024*1024)
 	r.Header.Set("X-Authenticated-Tenant", tenant.Tenant)
 	r.Header.Set("X-Authenticated-Tier", tenant.Tier)
-	proxy.ServeHTTP(rec, r)
+	node.Proxy.ServeHTTP(rec, r)
 	if cb != nil {
 		if rec.status >= 500 {
 			cb.RecordFailure()
@@ -172,16 +213,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) matchRoute(path string) (config.RouteConfig, *httputil.ReverseProxy) {
+func (g *Gateway) matchRoute(path string) (config.RouteConfig, *LoadBalancer) {
 	var best config.RouteConfig
-	var bestProxy *httputil.ReverseProxy
+	var bestBalancer *LoadBalancer
 	for _, route := range g.cfg.Routes {
 		if strings.HasPrefix(path, route.PathPrefix) && len(route.PathPrefix) > len(best.PathPrefix) {
 			best = route
-			bestProxy = g.proxies[route.PathPrefix]
+			bestBalancer = g.balancers[route.PathPrefix]
 		}
 	}
-	return best, bestProxy
+	return best, bestBalancer
 }
 
 type statusRecorder struct {
