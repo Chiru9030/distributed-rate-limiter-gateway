@@ -38,11 +38,14 @@ type TenantConfig struct {
 }
 
 type GatewayConfig struct {
-	ListenAddr    string
-	RedisAddr     string
-	DefaultPolicy RateLimitPolicy
-	Tenants       map[string]TenantConfig
-	Routes        []RouteConfig
+	ListenAddr      string
+	RedisAddr       string
+	RedisPassword   string
+	AdminAPIKey     string
+	AllowedOrigins  string
+	DefaultPolicy   RateLimitPolicy
+	Tenants         map[string]TenantConfig
+	Routes          []RouteConfig
 	UpstreamTimeout time.Duration
 }
 
@@ -56,19 +59,7 @@ func DefaultConfig() GatewayConfig {
 			Window:     time.Minute,
 			RefillRate: 1.0,
 		},
-		Tenants: map[string]TenantConfig{
-			"sk_test_acme_123": {
-				APIKey: "sk_test_acme_123",
-				Tenant: "acme_corp",
-				Tier:   "pro",
-				Policy: RateLimitPolicy{
-					Algorithm:  AlgoTokenBucket,
-					Limit:      100,
-					Window:     time.Minute,
-					RefillRate: 5.0,
-				},
-			},
-		},
+		Tenants: map[string]TenantConfig{},
 	}
 }
 

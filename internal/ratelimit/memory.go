@@ -44,7 +44,19 @@ func NewMemoryLimiterWithClock(nowFn func() time.Time) *MemoryLimiter {
 	return m
 }
 
+func normalizePolicy(policy config.RateLimitPolicy) config.RateLimitPolicy {
+	if policy.Limit <= 0 {
+		policy.Limit = 1
+	}
+	if policy.Window <= 0 {
+		policy.Window = time.Second
+	}
+	return policy
+}
+
 func (m *MemoryLimiter) Allow(_ context.Context, key string, policy config.RateLimitPolicy) (Decision, error) {
+	policy = normalizePolicy(policy)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -64,6 +76,9 @@ func (m *MemoryLimiter) allowTokenBucket(key string, policy config.RateLimitPoli
 	refillRate := policy.RefillRate
 	if refillRate <= 0 && policy.Window > 0 {
 		refillRate = capacity / policy.Window.Seconds()
+	}
+	if refillRate <= 0 {
+		refillRate = 1.0
 	}
 
 	b, ok := m.buckets[key]
@@ -105,7 +120,6 @@ func (m *MemoryLimiter) allowSlidingWindow(key string, policy config.RateLimitPo
 	cutoff := now.Add(-policy.Window)
 	timestamps := m.windows[key]
 
-	// Prune timestamps outside the sliding window
 	idx := 0
 	for idx < len(timestamps) && !timestamps[idx].After(cutoff) {
 		idx++
@@ -115,10 +129,7 @@ func (m *MemoryLimiter) allowSlidingWindow(key string, policy config.RateLimitPo
 	if len(timestamps) < policy.Limit {
 		timestamps = append(timestamps, now)
 		m.windows[key] = timestamps
-		resetAt := now.Add(policy.Window)
-		if len(timestamps) > 0 {
-			resetAt = timestamps[0].Add(policy.Window)
-		}
+		resetAt := timestamps[0].Add(policy.Window)
 		return Decision{
 			Allowed:   true,
 			Limit:     policy.Limit,
@@ -128,7 +139,10 @@ func (m *MemoryLimiter) allowSlidingWindow(key string, policy config.RateLimitPo
 	}
 
 	m.windows[key] = timestamps
-	oldest := timestamps[0]
+	oldest := now
+	if len(timestamps) > 0 {
+		oldest = timestamps[0]
+	}
 	retryAfter := oldest.Add(policy.Window).Sub(now)
 	if retryAfter < 0 {
 		retryAfter = 0
@@ -147,6 +161,9 @@ func (m *MemoryLimiter) allowLeakyBucket(key string, policy config.RateLimitPoli
 	leakRate := policy.RefillRate
 	if leakRate <= 0 && policy.Window > 0 {
 		leakRate = capacity / policy.Window.Seconds()
+	}
+	if leakRate <= 0 {
+		leakRate = 1.0
 	}
 
 	b, ok := m.leakyBuckets[key]
@@ -182,4 +199,3 @@ func (m *MemoryLimiter) allowLeakyBucket(key string, policy config.RateLimitPoli
 		RetryAfter: retryAfter,
 	}
 }
-

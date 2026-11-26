@@ -1,0 +1,6 @@
+.git
+.env
+sdk-ts/node_modules
+sdk-ts/dist
+*.log
+coverage.out

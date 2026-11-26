@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FluxGate — Distributed API Gateway &amp; Rate Limiter Control Plane</title>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+  <style>
+    :root { --bg: #020617; --card: #0f172a; --border: #1e293b; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --ok: #10b981; --warn: #f59e0b; --err: #f43f5e; }
+    * { box-sizing: border-box; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    body { margin: 0; background: var(--bg); color: var(--text); }
+    header { position: sticky; top: 0; background: rgba(15, 23, 42, 0.94); border-bottom: 1px solid var(--border); padding: 16px 24px; backdrop-filter: blur(8px); }
+    .wrap { max-width: 1200px; margin: 0 auto; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; margin: 24px 0; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; margin-bottom: 24px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+    .kpi-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .kpi-val { font-size: 28px; font-weight: 700; margin-top: 6px; color: var(--accent); }
+    input, select, button { border-radius: 8px; border: 1px solid var(--border); background: #020617; color: var(--text); padding: 8px 12px; font-size: 13px; }
+    button { background: #0284c7; border-color: #0284c7; font-weight: 600; cursor: pointer; }
+    button:hover { background: #0369a1; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .ok { background: rgba(16, 185, 129, 0.15); color: var(--ok); }
+    .err { background: rgba(244, 63, 94, 0.15); color: var(--err); }
+    .muted { color: var(--muted); font-size: 12px; }
+    pre { background: #020617; border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow: auto; font-size: 12px; max-height: 220px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap row">
+      <div>
+        <h1 style="margin:0;font-size:18px;color:var(--accent);">FluxGate — Distributed API Gateway &amp; Rate Limiter UI</h1>
+        <div class="muted">Token Bucket • Sliding Window • Leaky Bucket • Weighted Load Balancer • Circuit Breaker</div>
+      </div>
+      <div class="row">
+        <input id="adminKeyInput" type="password" placeholder="Admin API Key (X-API-Key)" />
+        <button id="refreshBtn" type="button">Refresh Telemetry</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap" style="padding:0 24px 36px;">
+    <div id="statusNotice" style="margin-top:16px;font-size:13px;" class="muted"></div>
+
+    <div class="grid-4">
+      <div class="card"><div class="kpi-label">Total Requests</div><div id="kpiTotal" class="kpi-val">0</div></div>
+      <div class="card"><div class="kpi-label">Rate Limited (429)</div><div id="kpiRateLimited" class="kpi-val" style="color:var(--warn);">0</div></div>
+      <div class="card"><div class="kpi-label">Auth Rejections (401)</div><div id="kpiAuthErr" class="kpi-val" style="color:var(--err);">0</div></div>
+      <div class="card"><div class="kpi-label">Upstream Errors (5xx)</div><div id="kpiUpErr" class="kpi-val" style="color:var(--ok);">0</div></div>
+    </div>
+
+    <div class="grid-2">
+      <section class="card">
+        <h2 style="margin:0 0 8px;font-size:16px;">Dynamic Tenant Provisioning</h2>
+        <div class="muted">Calls protected <code>POST /v1/admin/tenants</code> to hot-reload tenant keys and rate limits.</div>
+        <label for="tenantName">Tenant Slug</label>
+        <input id="tenantName" value="acme_corp" style="width:100%;" />
+        <label for="tenantKey">Tenant API Key</label>
+        <input id="tenantKey" placeholder="Generate or paste key" style="width:100%;" />
+        <label for="tenantAlgo">Rate Limit Algorithm</label>
+        <select id="tenantAlgo" style="width:100%;">
+          <option value="token_bucket">token_bucket</option>
+          <option value="sliding_window">sliding_window</option>
+          <option value="leaky_bucket">leaky_bucket</option>
+        </select>
+        <div class="row" style="margin-top:8px;">
+          <div style="flex:1;">
+            <label for="tenantLimit">Burst / Window Limit</label>
+            <input id="tenantLimit" type="number" value="10" min="1" style="width:100%;" />
+          </div>
+          <div style="flex:1;">
+            <label for="tenantRefill">Refill / Leak Rate (req/s)</label>
+            <input id="tenantRefill" type="number" value="2" min="0.1" step="0.1" style="width:100%;" />
+          </div>
+        </div>
+        <button id="provisionBtn" type="button" style="margin-top:14px;width:100%;">Provision / Hot-Reload Tenant</button>
+        <pre id="provisionOut" style="margin-top:12px;">Awaiting action...</pre>
+      </section>
+
+      <section class="card">
+        <h2 style="margin:0 0 8px;font-size:16px;">Live Gateway Request Probe</h2>
+        <div class="muted">Test rate-limit response headers and proxy forwarding against configured routes.</div>
+        <label for="probePath">Target Path</label>
+        <input id="probePath" value="/v1/status" style="width:100%;" />
+        <label for="probeKey">Client Bearer / X-API-Key</label>
+        <input id="probeKey" placeholder="Tenant API Key" style="width:100%;" />
+        <button id="probeBtn" type="button" style="margin-top:14px;width:100%;">Send Proxied Request</button>
+        <pre id="probeOut" style="margin-top:12px;">No probe sent yet.</pre>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2 style="margin:0 0 12px;font-size:16px;">Route Pools, Load Balancers &amp; Circuit Breakers</h2>
+      <table>
+        <thead>
+          <tr><th>Path Prefix</th><th>Strategy</th><th>Upstream Node</th><th>Weight</th><th>Health</th></tr>
+        </thead>
+        <tbody id="routesBody">
+          <tr><td colspan="5" class="muted">Enter Admin API key (if configured) and refresh to load upstream topology.</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

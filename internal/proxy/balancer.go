@@ -54,6 +54,33 @@ func (lb *LoadBalancer) Next() *UpstreamNode {
 	}
 
 	idx := lb.index.Add(1) - 1
+	if lb.strategy == "weighted" {
+		totalWeight := 0
+		for _, n := range healthyNodes {
+			w := n.Weight
+			if w <= 0 {
+				w = 1
+			}
+			if w > 50 {
+				w = 50
+			}
+			totalWeight += w
+		}
+		slot := int(idx % uint64(totalWeight))
+		for _, n := range healthyNodes {
+			w := n.Weight
+			if w <= 0 {
+				w = 1
+			}
+			if w > 50 {
+				w = 50
+			}
+			if slot < w {
+				return n
+			}
+			slot -= w
+		}
+	}
 	return healthyNodes[idx%uint64(len(healthyNodes))]
 }
 

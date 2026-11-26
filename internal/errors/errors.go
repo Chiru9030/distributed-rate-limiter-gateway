@@ -47,6 +47,37 @@ func RateLimited(w http.ResponseWriter, reqID, traceID string, retryAfterSec int
 	_ = retryAfterSec
 }
 
+func PayloadTooLarge(w http.ResponseWriter, reqID, traceID, msg string) {
+	WriteJSON(w, http.StatusRequestEntityTooLarge, APIError{
+		Type:      "invalid_request_error",
+		Code:      "payload_too_large",
+		Message:   msg,
+		RequestID: reqID,
+		TraceID:   traceID,
+	})
+}
+
+func MethodNotAllowed(w http.ResponseWriter, reqID, traceID, msg string) {
+	WriteJSON(w, http.StatusMethodNotAllowed, APIError{
+		Type:      "invalid_request_error",
+		Code:      "method_not_allowed",
+		Message:   msg,
+		RequestID: reqID,
+		TraceID:   traceID,
+	})
+}
+
+func BadRequest(w http.ResponseWriter, reqID, traceID, param, msg string) {
+	WriteJSON(w, http.StatusBadRequest, APIError{
+		Type:      "invalid_request_error",
+		Code:      "invalid_request",
+		Param:     param,
+		Message:   msg,
+		RequestID: reqID,
+		TraceID:   traceID,
+	})
+}
+
 func BadGateway(w http.ResponseWriter, reqID, traceID, msg string) {
 	WriteJSON(w, http.StatusBadGateway, APIError{
 		Type:      "api_connection_error",

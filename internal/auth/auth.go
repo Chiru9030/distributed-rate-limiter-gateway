@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"net/http"
 	"strings"
@@ -37,8 +38,10 @@ func (a *Authenticator) Authenticate(r *http.Request) (config.TenantConfig, bool
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
+	tokenDigest := sha256.Sum256([]byte(token))
 	for key, tenant := range a.tenants {
-		if len(token) == len(key) && subtle.ConstantTimeCompare([]byte(token), []byte(key)) == 1 {
+		keyDigest := sha256.Sum256([]byte(key))
+		if subtle.ConstantTimeCompare(tokenDigest[:], keyDigest[:]) == 1 {
 			return tenant, true
 		}
 	}

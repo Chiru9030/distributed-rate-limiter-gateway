@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rate-limiter-gateway-config
+  labels:
+    app: distributed-rate-limiter-gateway
+data:
+  PORT: "8080"
+  LISTEN_ADDR: ":8080"
+  REDIS_ADDR: "redis-svc:6379"
+  UPSTREAM_STRATEGY: "weighted"
+  HEALTH_CHECK_INTERVAL: "5s"
+  ALLOWED_ORIGINS: "https://gateway.example.com"

@@ -60,10 +60,13 @@ func (m *Metrics) ServePrometheus(w http.ResponseWriter, _ *http.Request) {
 			"# HELP gateway_upstream_errors_total Upstream 5xx/connection errors\n"+
 			"# TYPE gateway_upstream_errors_total counter\n"+
 			"gateway_upstream_errors_total %d\n"+
-			"# HELP gateway_request_duration_microseconds_sum Cumulative latency in microseconds\n"+
-			"# TYPE gateway_request_duration_microseconds_sum counter\n"+
-			"gateway_request_duration_microseconds_sum %d\n",
-		total, rl, auth, up, lat,
+			"# HELP gateway_request_duration_microseconds_sum Cumulative latency in microseconds\n" +
+			"# TYPE gateway_request_duration_microseconds_sum counter\n" +
+			"gateway_request_duration_microseconds_sum %d\n" +
+			"# HELP gateway_request_duration_microseconds_count Total timed requests for computing average latency\n" +
+			"# TYPE gateway_request_duration_microseconds_count counter\n" +
+			"gateway_request_duration_microseconds_count %d\n",
+		total, rl, auth, up, lat, total,
 	)
 }
 

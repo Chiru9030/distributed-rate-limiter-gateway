@@ -98,6 +98,8 @@ export class GatewayClient {
     requests: Array<{ method: string; path: string; body?: unknown }>,
     concurrency = 4,
   ): Promise<Array<GatewayResponse<T>>> {
+    if (requests.length === 0) return [];
+    const safeConcurrency = Math.max(1, Math.floor(concurrency || 1));
     const results: Array<GatewayResponse<T>> = new Array(requests.length);
     let index = 0;
 
@@ -110,7 +112,7 @@ export class GatewayClient {
       }
     };
 
-    const workers = Array.from({ length: Math.min(concurrency, requests.length) }, () => worker());
+    const workers = Array.from({ length: Math.min(safeConcurrency, requests.length) }, () => worker());
     await Promise.all(workers);
     return results;
   }
@@ -120,8 +122,9 @@ export class GatewayClient {
     path: string,
     options: RequestOptions = {},
   ): Promise<GatewayResponse<T>> {
+    const upperMethod = method.toUpperCase();
     const url = `${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
-    const isMutating = method === 'POST' || method === 'PUT' || method === 'PATCH';
+    const isMutating = upperMethod === 'POST' || upperMethod === 'PUT' || upperMethod === 'PATCH';
     const idempotencyKey =
       options.idempotencyKey ?? (isMutating ? crypto.randomUUID() : undefined);
 
@@ -136,12 +139,25 @@ export class GatewayClient {
         ...options.headers,
       };
 
-      const res = await this.fetchFn(url, {
-        method,
-        headers,
-        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-        signal: AbortSignal.timeout(options.timeoutMs ?? this.timeoutMs),
-      });
+      let res: Response;
+      try {
+        res = await this.fetchFn(url, {
+          method: upperMethod,
+          headers,
+          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+          signal: AbortSignal.timeout(options.timeoutMs ?? this.timeoutMs),
+        });
+      } catch (err) {
+        if (attempt <= this.maxRetries) {
+          await this.sleepFn(this.baseRetryDelayMs * Math.pow(2, attempt - 1));
+          continue;
+        }
+        throw new GatewayApiError(0, {
+          type: 'api_connection_error',
+          code: 'network_error',
+          message: err instanceof Error ? err.message : 'Network failure during gateway request',
+        });
+      }
 
       const rateLimit: RateLimitInfo = {
         limit: parseOptionalInt(res.headers.get('x-ratelimit-limit')),
@@ -159,6 +175,11 @@ export class GatewayClient {
 
       const retryable = res.status === 429 || res.status >= 500;
       if (retryable && attempt <= this.maxRetries) {
+        if (res.body) {
+          await res.body.cancel().catch((cancelErr: unknown) => {
+            void cancelErr;
+          });
+        }
         const retryAfterSec = parseOptionalInt(res.headers.get('retry-after'));
         const delayMs = retryAfterSec
           ? retryAfterSec * 1000
@@ -192,4 +213,3 @@ function parseOptionalInt(val: string | null): number | undefined {
   const n = Number(val);
   return Number.isFinite(n) ? n : undefined;
 }
-

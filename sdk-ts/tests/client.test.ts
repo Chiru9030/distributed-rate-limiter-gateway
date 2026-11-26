@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { GatewayApiError, GatewayClient } from '../src/index.js';
 
@@ -99,15 +100,75 @@ describe('GatewayClient SDK', () => {
       fetchFn: mockFetch,
     });
 
-    const requests = Array.from({ length: 6 }, (_, i) => ({
+    const batchReqs = Array.from({ length: 6 }, (_, i) => ({
       method: 'POST',
-      path: `/v1/items/${i}`,
-      body: { index: i },
+      path: `/v1/events/${i}`,
+      body: { idx: i },
     }));
 
-    const results = await client.batch(requests, 2);
-    expect(results).toHaveLength(6);
+    const responses = await client.batch<{ status: string }>(batchReqs, 2);
+    expect(responses).toHaveLength(6);
     expect(maxObservedActive).toBeLessThanOrEqual(2);
+    expect(responses[0].status).toBe(200);
+  });
+
+  it('handles lowercase methods, network/5xx exponential retries, concurrency<=0 clamp, and live HTTP server roundtrip', async () => {
+    let attempts = 0;
+    let seenIdemKey: string | undefined;
+    const sleeps: number[] = [];
+
+    const mockFetch: typeof fetch = async (_url, init) => {
+      attempts++;
+      const headers = init?.headers as Record<string, string>;
+      seenIdemKey = headers['Idempotency-Key'];
+      if (attempts === 1) {
+        throw new Error('ECONNRESET');
+      }
+      if (attempts === 2) {
+        return new Response('upstream bad', { status: 503 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    const client = new GatewayClient({
+      baseUrl: 'http://example.internal',
+      apiKey: 'demo_key',
+      maxRetries: 3,
+      baseRetryDelayMs: 50,
+      fetchFn: mockFetch,
+      sleepFn: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    const res = await client.request<{ ok: boolean }>('post', '/v1/orders', { body: { item: 1 } });
+    expect(res.data.ok).toBe(true);
+    expect(seenIdemKey).toBeTruthy();
+    expect(sleeps).toEqual([50, 100]);
+
+    const clamped = await client.batch<{ ok: boolean }>([{ method: 'get', path: '/v1/orders' }], 0);
+    expect(clamped).toHaveLength(1);
+    expect(clamped[0].status).toBe(200);
+
+    // Real Node HTTP server integration test (zero mocking)
+    const server = createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'X-RateLimit-Remaining': '9' });
+      res.end(JSON.stringify({ auth: req.headers.authorization, method: req.method }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+    try {
+      const liveClient = new GatewayClient({
+        baseUrl: `http://127.0.0.1:${port}`,
+        apiKey: 'live_key_123',
+      });
+      const liveRes = await liveClient.get<{ auth: string; method: string }>('/v1/ping');
+      expect(liveRes.data.auth).toBe('Bearer live_key_123');
+      expect(liveRes.rateLimit.remaining).toBe(9);
+    } finally {
+      server.close();
+    }
   });
 });
-
